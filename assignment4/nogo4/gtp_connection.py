@@ -9,7 +9,6 @@ in the Deep-Go project by Isaac Henrion and Amos Storkey
 at the University of Edinburgh.
 """
 import traceback
-import signal
 import numpy as np
 import re
 from sys import stdin, stdout, stderr
@@ -45,8 +44,6 @@ class GtpConnection:
         self._debug_mode: bool = debug_mode
         self.go_engine = go_engine
         self.board: GoBoard = board
-        self.timelimit = 30
-        signal.signal(signal.SIGALRM, self.handler)
         self.commands: Dict[str, Callable[[List[str]], None]] = {
             "protocol_version": self.protocol_version_cmd,
             "quit": self.quit_cmd,
@@ -356,18 +353,8 @@ class GtpConnection:
         board_color = args[0].lower()
         color = color_to_int(board_color)
         move = self.go_engine.get_move(self.board, color)
-        try:
-            signal.alarm(self.timelimit)
-            self.sboard = self.board.copy()
-            move = self.go_engine.get_move(self.board, color)
-            self.board=self.sboard
-            signal.alarm(0)
-        except Exception as e:
-            # Time's up! Use the best move so far.
-            move=self.go_engine.get_best_move()
-
         if move is None:
-            self.respond('resign')
+            self.respond('unknown')
             return
 
         move_coord = point_to_coord(move, self.board.size)
@@ -385,9 +372,6 @@ class GtpConnection:
         self.timelimit = int(args[0])
         self.respond()
 
-    def handler(self, signum, fram):
-        self.board = self.sboard
-        raise Exception("unknown")
     """
     ==========================================================================
     Assignment 4 - game-specific commands end here
