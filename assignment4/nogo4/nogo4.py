@@ -70,9 +70,9 @@ class NoGo:
     def generateLegalMoves(self, gameState, color):
         ePts = gameState.get_empty_points()
         moves = []
-        for pt in ePts:
+        for position in ePts:
             if gameState.is_legal(pt, color):
-                moves.append(pt)
+                moves.append(position)
         return moves
 
     def simulate(self, state, move, toplay):
@@ -128,10 +128,10 @@ def findBest(stats, C, n):
 def bestArm(stats):
     best = -1
     bestScore = -INFINITY
-    for i in range(len(stats)):
-        if stats[i][1] > bestScore:
-            bestScore = stats[i][1]
-            best = i
+    for stat in range(len(stats)):
+        if stats[stat][1] > bestScore:
+            bestScore = stats[stat][1]
+            best = stat
     assert best != -1
     return best
 
