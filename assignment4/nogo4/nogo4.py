@@ -1,71 +1,66 @@
-#!/usr/local/bin/python3
-# /usr/bin/python3
-# Set the path to your python3 above
-
-#!/usr/bin/python3
-# Set the path to your python3 above
-
-
-
-from gtp_connection import GtpConnection, point_to_coord, format_point
-from board_base import DEFAULT_SIZE, GO_POINT, GO_COLOR, BLACK, WHITE, EMPTY, BORDER
-from board import GoBoard
-from board_util import GoBoardUtil
-from engine import GoEngine
-import numpy as np
-import random
-from math import log,sqrt
+from gtp_connection import GtpConnection
+from board_util import GoBoardUtil, EMPTY, BLACK, WHITE
+from simple_board import SimpleGoBoard
 import sys
+import ucb
+import numpy as np
+import random 
+from math import log, sqrt
 
-INFINITY = float('inf')
-class NoGo:
+
+def undo(board, move):
+    board.board[move] = EMPTY
+    board.current_player = GoBoardUtil.opponent(board.current_player)
+
+def play_move(board, move, color):
+    board.play_move(move, color)
+
+def game_result(board):    
+    legal_moves = GoBoardUtil.generate_legal_moves(board, board.current_player)
+    if not legal_moves:
+        result = BLACK if board.current_player == WHITE else WHITE
+    else:
+        result = None
+    return result
+
+class Nogo():
     def __init__(self):
         """
-        Go player that selects moves randomly from the set of legal moves.
-        Does not use the fill-eye filter.
-        Passes only if there is no other legal move.
+        NoGo player that selects moves by flat Monte Carlo Search.
+        Resigns only at the end of game.
+        Replace this player's algorithm by your own.
 
-        Parameters
-        ----------
-        name : str
-            name of the player (used by the GTP interface).
-        version : float
-            version number (used by the GTP interface).
         """
-        GoEngine.__init__(self, "NoGo4", 1.0)
-        self.noOfSim = 50
+        self.name = "NoGo Assignment 4"
+        self.version = 1.0
+        self.weights = self.openFile('nogo4/weights')
+        self.UCB_ON = True
+        self.best_move = None
 
-
-    
-    
-    # def get_move(self, board: GoBoard, color: GO_COLOR) -> GO_POINT:
-    #     return GoBoardUtil.generate_random_move(board, color,
-    #                                             use_eye_filter=False)
-
-    def randomMove(self, state, player):
-            moves = state.get_empty_points()
-            np.random.shuffle(moves)
-            for move in moves:
-                legal = state.is_legal(move, player)
-                if legal:
-                    return move
-            return None
+    def openFile(self, fileName):
+        weights = {}
+        with open(fileName, 'r') as f:
+            for line in f:
+                item = line.split(" ")
+                weights[int(item[0])] = float(item[1])
+        return weights
 
     def evaluate(self, cp):
-            return BLACK + WHITE - cp
+        return BLACK + WHITE - cp
 
+    def isTerminal(self, remainingMoves):
+        if len(remainingMoves) == 0:
+            return True
+        return False
+    
+    def undoMove(self, state, move):
+        state.board[move] == EMPTY
+        cp = state.current_player
+        state.current_player = WHITE + BLACK - cp
 
-
-    def randomSimulation(self, state,  move, play):
-        state_copy = state.copy()
-        state_copy.play_move(move, play)
-        while True:
-            current = state_copy.current_player
-            move = self.randomMove(state_copy, current)
-            if move == None:
-                return self.evaluate(current)
-            state_copy.play_move(move,current)
-
+    def quickPlayMove(self, state, move, player):
+        state.board[move] = player
+        state.current_player = WHITE + BLACK - player
 
     def generateLegalMoves(self, gameState, color):
         ePts = gameState.get_empty_points()
@@ -75,38 +70,63 @@ class NoGo:
                 moves.append(position)
         return moves
 
-    def simulate(self, state, move, toplay):
-        return self.randomSimulation(state, move, toplay)
-                
-    def simulateMove(self, state, move, toplay):
-        wins = 0 
-        for _ in range(self.noOfSim):
-            result = self.simulate(state, move, toplay)
-            if result == toplay:
-                wins += 1
-        return wins
+    def randomMoveGen(self, state, player):
+        moves = state.get_empty_points()
+        np.random.shuffle(moves)
+        for move in moves:
+            if state.is_legal(move, player):
+                return move
+        return None
 
-    def get_move(self, state, color):
-        state_copy = state.copy()
-        legalMoves = self.generateLegalMoves(state_copy,color)
-        probability = {}
-        if not legalMoves:
-            return None
-        elif len(legalMoves) == 1:
-            return legalMoves[0]
-        else:
-            C = 0.4
-            best =ucb_run(self, state_copy, C, legalMoves, color)
-            return best
+    def getPatternMoves(self, state, cp, legalMoves):
+        #<---generate a pattern move--->
+        moves = {}
+        weightSum = 0 
+        for move in legalMoves:
+            moveWeight = self.getWeight(state, cp, move)
+            if moveWeight != None:
+                assert move not in moves.keys()
+                assert state.board[move] == EMPTY
+                moves[move] = moveWeight
+                weightSum += moveWeight
+        return {k:(v/weightSum) for k,v in moves.items()}
 
+    def getWeight(self, state,  toplay, m):
+        pattern = [m+state.NS-1, m+state.NS, m+state.NS+1,
+                   m-1,                      m+1,
+                   m-state.NS-1, m-state.NS, m-state.NS+1]
+        addy = 0 
+        for i in range(len(pattern)):
+            p = state.board[pattern[i]]
+            if toplay == BLACK:
+                addy += p *(4**i)
+            else:
+                addy += ((BLACK + WHITE - p)*(4**i)) if p == BLACK or p == WHITE else (p*(4**i))
+        return self.weights.get(addy)
+
+    def get_move(self, original_board, color):
         
 
+        tempState = original_board.copy()
+        legalMoves = self.generateLegalMoves(tempState, color)
+        
+        lenLegal = len(legalMoves)
+        if lenLegal > 30:
+            self.num_sim = 8
+        elif 30 >= lenLegal > 20:
+            self.num_sim = 10
+        elif 20 >= lenLegal > 15:
+            self.num_sim = 16
+        else:
+            self.num_sim = 20
 
 
 
 
-#...............................ucb.......................................................
 
+        bestScore = -float('inf')
+
+<<<<<<< Updated upstream
     
 def ucb(stats, C, i, n):
     if stats[i][1] == 0:
@@ -151,13 +171,65 @@ def ucb_run(self, board, C, moves, toplay):
 
 
 def run() -> None:
+=======
+        if len(legalMoves) == 0:
+            return None
+        
+        if self.UCB_ON:
+            C = 0.4
+            stats = [[0,0] for _ in legalMoves]
+            num_simulation = len(legalMoves) * self.num_sim
+            for n in range(num_simulation):
+                moveIndex = ucb.findBest(stats, C, n)
+                result = self.simulate(tempState, legalMoves[moveIndex], color)
+            
+                
+                stats[moveIndex][1] += 1
+                if result == color:
+                    stats[moveIndex][0] += 1
+
+                if stats[moveIndex][1] > bestScore:
+                    self.best_move = legalMoves[moveIndex] 
+
+            best = legalMoves[ucb.bestArm(stats)]
+        
+
+        return best
+
+    def simulate(self, gameState, move, toplay):
+        tempState = gameState.copy()
+        tempState.play_move(move, toplay)
+        
+        while True:
+
+            cp = tempState.current_player
+            legalMoves = self.generateLegalMoves(tempState, cp)
+            if self.isTerminal(legalMoves):
+                return self.evaluate(cp)
+            moves = self.getPatternMoves(tempState, cp, legalMoves)
+            playedMove = False
+            if len(moves) != 0:
+                prob = random.uniform(0,1)
+                vn = 0 
+                for possibleMove in moves.keys():
+                    vn += moves[possibleMove]
+                    if prob <= vn:
+                        tempState.play_move(possibleMove, cp)
+                        playedMove = True
+                        break
+            if not playedMove:
+                tempState.playMove(self.randomMoveGen(tempState, cp), cp)
+
+            
+
+def run():
+>>>>>>> Stashed changes
     """
     start the gtp connection and wait for commands.
     """
-    board: GoBoard = GoBoard(DEFAULT_SIZE)
-    con: GtpConnection = GtpConnection(NoGo(), board)
+    board = SimpleGoBoard(7)
+    con = GtpConnection(Nogo(), board)
     con.start_connection()
 
-
-if __name__ == "__main__":
+if __name__=='__main__':
     run()
